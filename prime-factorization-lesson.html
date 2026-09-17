@@ -378,6 +378,20 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 const PRAISE=['Correct.','That is it.','Right.','Yes \u2014 that works.','Exactly right.'];
 
+/* Deep links work when the page is served as a file or over http. Inside a
+   sandboxed about:srcdoc frame the History API throws, so both directions are
+   guarded and the app simply opens at the first problem. */
+function wantedId(){
+  try{ return (window.location.hash||'').replace('#',''); }catch(e){ return ''; }
+}
+function setHash(pid){
+  try{
+    if(window.location.protocol==='about:') return;
+    if(window.history && window.history.replaceState)
+      window.history.replaceState(null,'','#'+pid);
+  }catch(e){ /* sandboxed frame: navigation state is not ours to change */ }
+}
+
 function boot(app){
   APP=app;
   if(app.startTab) TAB=app.startTab;
@@ -385,7 +399,7 @@ function boot(app){
     log:[], submitted:false, seconds:0}; });
   buildSide(); buildPicker();
   wire();
-  open(app.problems[0].id);
+  open(BY[wantedId()] ? wantedId() : app.problems[0].id);
   TIMER=setInterval(()=>{ if(CUR){ ST[CUR].seconds++; paintStats(); } },1000);
 }
 
@@ -461,6 +475,7 @@ function open(pid){
   disarm();
   paintTabs(); paintDesc(); paintSteps(); paintLog(); paintStats(); paintSide();
   const o=order(); $('prev').disabled=o.indexOf(pid)===0; $('next').disabled=o.indexOf(pid)===o.length-1;
+  setHash(pid);
   $('desc').scrollTop=0;
 }
 function save(){
