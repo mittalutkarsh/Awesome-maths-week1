@@ -61,8 +61,33 @@ table.cmp th{background:#f1f6f6}
 a:focus-visible{outline:3px solid var(--teal);outline-offset:2px}
 footer.end{color:var(--ink-soft);font-size:15px;margin-top:26px}
 footer.end a{color:var(--teal-dark)}
+
+.inkpad{position:fixed;inset:0;z-index:60;pointer-events:none;touch-action:none}
+.inklive{position:fixed;inset:0;z-index:61;pointer-events:none;touch-action:none}
+.inkpad.on{pointer-events:auto;cursor:crosshair}
+.inkpad.doc.on{touch-action:pan-y}
+.inktools{position:fixed;right:14px;bottom:14px;z-index:70;display:flex;flex-direction:column;
+  align-items:flex-end;gap:8px;font-family:var(--mono,"IBM Plex Mono",monospace)}
+.inktools .panel{display:none;background:#fff;border:1px solid #cfd9dc;border-radius:12px;
+  box-shadow:0 10px 30px rgba(8,26,30,.20);padding:10px;gap:8px;flex-direction:column}
+.inktools.open .panel{display:flex}
+.inktools .line{display:flex;gap:7px;align-items:center;justify-content:flex-end}
+.inktools button{font-family:inherit;font-size:12.5px;border:1px solid #cfd9dc;background:#fff;
+  color:#11242b;border-radius:8px;padding:7px 10px;cursor:pointer;line-height:1.2;min-height:34px}
+.inktools button:hover{background:#f1f6f6}
+.inktools button.sel{border-color:#0d6b6e;background:#e3eeee;color:#094f52;font-weight:500}
+.inktools .sw{width:30px;height:30px;border-radius:50%;padding:0;border:2px solid #fff;
+  box-shadow:0 0 0 1px #cfd9dc;min-height:0}
+.inktools .sw.sel{box-shadow:0 0 0 2px #0d6b6e}
+.inktools .nib{width:38px;padding:0;display:grid;place-items:center}
+.inktools .nib span{display:block;background:#11242b;border-radius:99px}
+.inktools .pen{font-size:14px;padding:11px 16px;border-radius:99px;background:#11242b;color:#fff;
+  border-color:#11242b;box-shadow:0 8px 22px rgba(8,26,30,.26)}
+.inktools .pen.on{background:#b1820f;border-color:#b1820f}
+.inktools .hint{font-size:11.5px;color:#4a626c;max-width:210px;text-align:right;line-height:1.4;margin:0}
+@media print{.inktools{display:none}}
 </style>
-</head><body>
+</head><body data-ink-mode="document">
 <div class="topbar"><b>Study notes</b><span class="sp"></span>
   <a href="index.html">home</a><a href="prime-factorization-lesson.html">lesson</a><a href="prime-factorization-practice.html">problem set</a></div>
 <div class="wrap">
@@ -461,4 +486,282 @@ move is how you end up testing forty cases and trusting the one that looked righ
 <footer class="end">Every number on this page was checked by computer.
 Practise it on the <a href="prime-factorization-practice.html">problem set</a>, or work through the ideas one at a time in
 the <a href="prime-factorization-lesson.html">lesson</a>.</footer>
-</main></div></body></html>
+</main></div>
+
+<canvas class="inkpad" id="inkpad" aria-hidden="true"></canvas>
+<canvas class="inklive" id="inklive" aria-hidden="true"></canvas>
+<div class="inktools" id="inktools">
+  <div class="panel" id="inkpanel">
+    <div class="line" role="group" aria-label="Ink colour">
+      <button class="sw sel" style="background:#d1402c" data-ink-color="#d1402c" aria-label="Red"></button>
+      <button class="sw" style="background:#0d6b6e" data-ink-color="#0d6b6e" aria-label="Teal"></button>
+      <button class="sw" style="background:#b1820f" data-ink-color="#b1820f" aria-label="Amber"></button>
+      <button class="sw" style="background:#11242b" data-ink-color="#11242b" aria-label="Black"></button>
+    </div>
+    <div class="line" role="group" aria-label="Thickness">
+      <button class="nib sel" data-ink-width="2.6" aria-label="Thin"><span style="width:18px;height:2px"></span></button>
+      <button class="nib" data-ink-width="5" aria-label="Medium"><span style="width:18px;height:4px"></span></button>
+      <button class="nib" data-ink-width="9" aria-label="Thick"><span style="width:18px;height:8px"></span></button>
+    </div>
+    <div class="line" role="group" aria-label="Tool">
+      <button class="sel" data-ink-tool="pen">pen</button>
+      <button data-ink-tool="hi">marker</button>
+      <button data-ink-tool="line">line</button>
+      <button data-ink-tool="box">box</button>
+      <button data-ink-tool="erase">erase</button>
+    </div>
+    <div class="line">
+      <button id="inkundo" aria-label="Undo last stroke">undo</button>
+      <button id="inkredo" aria-label="Redo">redo</button>
+      <button id="inkclear" aria-label="Clear all ink">clear</button>
+      <button id="inksave" aria-label="Save ink as a PNG">save</button>
+    </div>
+    <div class="line">
+      <button id="inkpalm" aria-pressed="false" aria-label="Stylus only, ignore finger touches">stylus only</button>
+    </div>
+    <p class="hint" id="inkhint"></p>
+  </div>
+  <button class="pen" id="inkpen" aria-pressed="false">✎&nbsp; Pen</button>
+</div>
+
+<script>
+/* Teaching pen.
+
+   Performance model: two viewport-sized canvases. Finished strokes live on the
+   committed layer and are never redrawn while drawing; the stroke in progress
+   is appended segment by segment to a live layer, so the per-frame cost is the
+   handful of new points, not the whole page of ink. In document mode the ink is
+   stored in page coordinates and the layers are re-rendered with a translate
+   when the page scrolls, which keeps both canvases small and sharp instead of
+   allocating one the height of the document.
+
+   window.INK exposes get/set so the host page can hold ink per problem.
+   data-ink-mode="document" on <body> anchors ink to the content. */
+(function(){
+  var cvC=document.getElementById('inkpad'), cvL=document.getElementById('inklive'),
+      tools=document.getElementById('inktools'), penBtn=document.getElementById('inkpen'),
+      hint=document.getElementById('inkhint'), palmBtn=document.getElementById('inkpalm');
+  if(!cvC||!cvL) return;
+  var cx=cvC.getContext('2d'), lx=cvL.getContext('2d');
+  if(!cx||!lx) return;
+
+  var DOC = (document.body.getAttribute('data-ink-mode')==='document');
+  var strokes=[], undone=[], cur=null, drawn=0, on=false;
+  var color='#d1402c', width=2.6, tool='pen', palm=false;
+  var dpr=1, W=0, H=0, ox=0, oy=0, pending=false, needFull=false;
+
+  hint.textContent = DOC
+    ? 'Ink sticks to the page, so you can scroll while drawing. A finger scrolls; the pen draws.'
+    : 'Drawing freezes the panes. Turn the pen off to scroll or type.';
+
+  function scrollOff(){
+    if(!DOC) return [0,0];
+    return [window.pageXOffset||0, window.pageYOffset||0];
+  }
+  function frame(ctx){
+    ctx.setTransform(dpr,0,0,dpr,-ox*dpr,-oy*dpr);
+  }
+  function geom(){
+    dpr=Math.min(window.devicePixelRatio||1, 2);
+    W=window.innerWidth; H=window.innerHeight;
+    [cvC,cvL].forEach(function(c){
+      c.width=Math.floor(W*dpr); c.height=Math.floor(H*dpr);
+      c.style.width=W+'px'; c.style.height=H+'px';
+    });
+    var s=scrollOff(); ox=s[0]; oy=s[1];
+    frame(cx); frame(lx);
+    repaint();
+  }
+  function wipe(ctx,c){
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,c.width,c.height);
+    frame(ctx);
+  }
+
+  /* ---------- geometry of one stroke ---------- */
+  function widthAt(a,b,base){
+    var d=Math.abs(b.x-a.x)+Math.abs(b.y-a.y);
+    var f=1-Math.min(d,34)/34*0.38;          /* faster stroke, finer line */
+    return base*(0.66+0.34*f*1.2);
+  }
+  function penSeg(ctx,a,b,s){
+    var w=widthAt(a,b,s.width);
+    b.w = w = a.w ? (a.w*0.6+w*0.4) : w;
+    ctx.strokeStyle=s.color; ctx.lineWidth=w; ctx.lineJoin=ctx.lineCap='round';
+    ctx.beginPath();
+    ctx.moveTo(a.x,a.y);
+    ctx.quadraticCurveTo(a.x,a.y,(a.x+b.x)/2,(a.y+b.y)/2);
+    ctx.lineTo(b.x,b.y);
+    ctx.stroke();
+  }
+  function bandSeg(ctx,a,b,s,w,style,comp){
+    ctx.globalCompositeOperation=comp||'source-over';
+    ctx.globalAlpha = (s.tool==='hi') ? 0.30 : 1;
+    ctx.strokeStyle=style; ctx.lineWidth=w; ctx.lineJoin=ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+    ctx.globalAlpha=1; ctx.globalCompositeOperation='source-over';
+  }
+  function shape(ctx,s){
+    var a=s.p[0], b=s.p[s.p.length-1];
+    ctx.strokeStyle=s.color; ctx.lineWidth=s.width; ctx.lineJoin=ctx.lineCap='round';
+    ctx.beginPath();
+    if(s.tool==='line'){ ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); }
+    else { ctx.rect(Math.min(a.x,b.x),Math.min(a.y,b.y),Math.abs(b.x-a.x),Math.abs(b.y-a.y)); }
+    ctx.stroke();
+  }
+  /* draw stroke segments [from, end) onto ctx */
+  function drawFrom(ctx,s,from){
+    var p=s.p;
+    if(!p.length) return;
+    if(s.tool==='line'||s.tool==='box'){ shape(ctx,s); return; }
+    if(p.length===1){
+      var dot={x:p[0].x+0.01,y:p[0].y};
+      if(s.tool==='erase') bandSeg(ctx,p[0],dot,s,Math.max(18,s.width*6),'rgba(0,0,0,1)','destination-out');
+      else if(s.tool==='hi') bandSeg(ctx,p[0],dot,s,Math.max(14,s.width*4.5),s.color);
+      else penSeg(ctx,p[0],dot,s);
+      return;
+    }
+    for(var i=Math.max(1,from); i<p.length; i++){
+      if(s.tool==='erase') bandSeg(ctx,p[i-1],p[i],s,Math.max(18,s.width*6),'rgba(0,0,0,1)','destination-out');
+      else if(s.tool==='hi') bandSeg(ctx,p[i-1],p[i],s,Math.max(14,s.width*4.5),s.color);
+      else penSeg(ctx,p[i-1],p[i],s);
+    }
+  }
+  function repaint(){                       /* committed layer, whole page of ink */
+    wipe(cx,cvC);
+    for(var i=0;i<strokes.length;i++){ resetWidths(strokes[i]); drawFrom(cx,strokes[i],1); }
+  }
+  function resetWidths(s){ for(var i=0;i<s.p.length;i++) s.p[i].w=0; }
+
+  /* ---------- frame loop: only the live stroke ---------- */
+  function tick(){
+    pending=false;
+    if(needFull){ needFull=false; var s=scrollOff(); ox=s[0]; oy=s[1]; frame(cx); frame(lx); repaint();
+      wipe(lx,cvL); if(cur){ resetWidths(cur); drawFrom(lx,cur,1); drawn=cur.p.length; } return; }
+    if(!cur) return;
+    if(cur.tool==='line'||cur.tool==='box'){ wipe(lx,cvL); shape(lx,cur); return; }
+    if(cur.p.length>drawn){ drawFrom(lx,cur,Math.max(1,drawn)); drawn=cur.p.length; }
+  }
+  function schedule(){
+    if(pending) return;
+    pending=true;
+    if(window.requestAnimationFrame) requestAnimationFrame(tick); else tick();
+  }
+
+  /* ---------- pointer ---------- */
+  function pt(e){ return {x:e.clientX+ox, y:e.clientY+oy, w:0}; }
+  function usable(e){ return on && !(palm && e.pointerType==='touch'); }
+
+  cvC.addEventListener('pointerdown',function(e){
+    if(!usable(e)) return;
+    e.preventDefault();
+    try{ cvC.setPointerCapture(e.pointerId); }catch(err){}
+    var t = (e.shiftKey && (tool==='pen'||tool==='hi')) ? 'line' : tool;
+    cur={tool:t,color:color,width:width,p:[pt(e)]};
+    drawn=0; undone=[];
+    schedule();
+  });
+  cvC.addEventListener('pointermove',function(e){
+    if(!cur || !usable(e)) return;
+    e.preventDefault();
+    var list = (e.getCoalescedEvents && e.getCoalescedEvents().length) ? e.getCoalescedEvents() : [e];
+    for(var i=0;i<list.length;i++){
+      var q=pt(list[i]), last=cur.p[cur.p.length-1];
+      if(cur.tool==='line'||cur.tool==='box') cur.p[1]=q;
+      else if(Math.abs(q.x-last.x)+Math.abs(q.y-last.y) >= 1.1) cur.p.push(q);
+    }
+    schedule();
+  });
+  function commit(){
+    if(!cur) return;
+    /* one pass onto the committed layer, then the live layer is cheap to wipe */
+    resetWidths(cur);
+    drawFrom(cx,cur,1);
+    strokes.push(cur);
+    cur=null; drawn=0;
+    wipe(lx,cvL);
+  }
+  cvC.addEventListener('pointerup',commit);
+  cvC.addEventListener('pointercancel',commit);
+  cvC.addEventListener('lostpointercapture',commit);
+  cvC.addEventListener('wheel',function(e){ if(on && !DOC) e.preventDefault(); },{passive:false});
+  cvC.addEventListener('touchmove',function(e){ if(on && !DOC) e.preventDefault(); },{passive:false});
+
+  if(DOC) window.addEventListener('scroll',function(){ needFull=true; schedule(); },{passive:true});
+
+  /* ---------- controls ---------- */
+  function setPen(v){
+    on=v;
+    cvC.classList.toggle('on',on);
+    if(DOC) cvC.classList.add('doc');
+    tools.classList.toggle('open',on);
+    penBtn.classList.toggle('on',on);
+    penBtn.setAttribute('aria-pressed',on?'true':'false');
+    penBtn.innerHTML = on ? '\u270e&nbsp; Pen on' : '\u270e&nbsp; Pen';
+    document.body.style.userSelect = on ? 'none' : '';
+    if(on){ needFull=true; schedule(); }
+  }
+  function pick(sel,el){
+    var list=document.querySelectorAll(sel);
+    for(var i=0;i<list.length;i++) list[i].classList.remove('sel');
+    el.classList.add('sel');
+  }
+  penBtn.addEventListener('click',function(){ setPen(!on); });
+  document.getElementById('inkundo').addEventListener('click',function(){
+    if(strokes.length){ undone.push(strokes.pop()); repaint(); } });
+  document.getElementById('inkredo').addEventListener('click',function(){
+    if(undone.length){ strokes.push(undone.pop()); repaint(); } });
+  document.getElementById('inkclear').addEventListener('click',function(){
+    undone=strokes.slice().reverse(); strokes=[]; repaint(); });
+  document.getElementById('inksave').addEventListener('click',function(){
+    try{
+      var out=document.createElement('canvas');
+      out.width=cvC.width; out.height=cvC.height;
+      var c2=out.getContext('2d');
+      c2.fillStyle='#fff'; c2.fillRect(0,0,out.width,out.height);
+      c2.drawImage(cvC,0,0); c2.drawImage(cvL,0,0);
+      var a=document.createElement('a');
+      a.download='ink.png'; a.href=out.toDataURL('image/png'); a.click();
+    }catch(err){}
+  });
+  palmBtn.addEventListener('click',function(){
+    palm=!palm; palmBtn.classList.toggle('sel',palm);
+    palmBtn.setAttribute('aria-pressed',palm?'true':'false');
+  });
+  var cs=document.querySelectorAll('[data-ink-color]');
+  for(var i=0;i<cs.length;i++) (function(b){
+    b.addEventListener('click',function(){ color=b.getAttribute('data-ink-color'); pick('[data-ink-color]',b); });
+  })(cs[i]);
+  var ws=document.querySelectorAll('[data-ink-width]');
+  for(var j=0;j<ws.length;j++) (function(b){
+    b.addEventListener('click',function(){ width=parseFloat(b.getAttribute('data-ink-width')); pick('[data-ink-width]',b); });
+  })(ws[j]);
+  var ts=document.querySelectorAll('[data-ink-tool]');
+  for(var k=0;k<ts.length;k++) (function(b){
+    b.addEventListener('click',function(){ tool=b.getAttribute('data-ink-tool'); pick('[data-ink-tool]',b); });
+  })(ts[k]);
+
+  document.addEventListener('keydown',function(e){
+    var t=e.target, typing = t && (t.tagName==='TEXTAREA'||t.tagName==='INPUT'||t.tagName==='SELECT');
+    if(e.key==='Escape' && on){ setPen(false); return; }
+    if(typing) return;
+    if(e.key==='p'||e.key==='P') setPen(!on);
+    if(on && (e.key==='z'||e.key==='Z') && (e.ctrlKey||e.metaKey)){
+      e.preventDefault();
+      if(e.shiftKey){ if(undone.length){ strokes.push(undone.pop()); repaint(); } }
+      else if(strokes.length){ undone.push(strokes.pop()); repaint(); }
+    }
+  });
+  window.addEventListener('resize',geom);
+  window.addEventListener('load',geom);
+
+  window.INK = {
+    get:function(){ return strokes; },
+    set:function(list){ strokes=list||[]; undone=[]; cur=null; wipe(lx,cvL); repaint(); },
+    resize:geom,
+    isOn:function(){ return on; }
+  };
+  geom();
+})();
+</script>
+</body></html>

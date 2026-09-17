@@ -183,6 +183,31 @@ table.cmp th{background:#f1f6f6}
   .log{max-height:none}
   .tabs{position:static}
 }
+
+.inkpad{position:fixed;inset:0;z-index:60;pointer-events:none;touch-action:none}
+.inklive{position:fixed;inset:0;z-index:61;pointer-events:none;touch-action:none}
+.inkpad.on{pointer-events:auto;cursor:crosshair}
+.inkpad.doc.on{touch-action:pan-y}
+.inktools{position:fixed;right:14px;bottom:14px;z-index:70;display:flex;flex-direction:column;
+  align-items:flex-end;gap:8px;font-family:var(--mono,"IBM Plex Mono",monospace)}
+.inktools .panel{display:none;background:#fff;border:1px solid #cfd9dc;border-radius:12px;
+  box-shadow:0 10px 30px rgba(8,26,30,.20);padding:10px;gap:8px;flex-direction:column}
+.inktools.open .panel{display:flex}
+.inktools .line{display:flex;gap:7px;align-items:center;justify-content:flex-end}
+.inktools button{font-family:inherit;font-size:12.5px;border:1px solid #cfd9dc;background:#fff;
+  color:#11242b;border-radius:8px;padding:7px 10px;cursor:pointer;line-height:1.2;min-height:34px}
+.inktools button:hover{background:#f1f6f6}
+.inktools button.sel{border-color:#0d6b6e;background:#e3eeee;color:#094f52;font-weight:500}
+.inktools .sw{width:30px;height:30px;border-radius:50%;padding:0;border:2px solid #fff;
+  box-shadow:0 0 0 1px #cfd9dc;min-height:0}
+.inktools .sw.sel{box-shadow:0 0 0 2px #0d6b6e}
+.inktools .nib{width:38px;padding:0;display:grid;place-items:center}
+.inktools .nib span{display:block;background:#11242b;border-radius:99px}
+.inktools .pen{font-size:14px;padding:11px 16px;border-radius:99px;background:#11242b;color:#fff;
+  border-color:#11242b;box-shadow:0 8px 22px rgba(8,26,30,.26)}
+.inktools .pen.on{background:#b1820f;border-color:#b1820f}
+.inktools .hint{font-size:11.5px;color:#4a626c;max-width:210px;text-align:right;line-height:1.4;margin:0}
+@media print{.inktools{display:none}}
 </style>
 </head><body>
 
@@ -283,6 +308,43 @@ Write your working, put the result in the answer box, then press <b>Check step</
       <span class="note">Asking for a hint does not use up a try.</span></footer>
   </div>
 </div>
+
+<canvas class="inkpad" id="inkpad" aria-hidden="true"></canvas>
+<canvas class="inklive" id="inklive" aria-hidden="true"></canvas>
+<div class="inktools" id="inktools">
+  <div class="panel" id="inkpanel">
+    <div class="line" role="group" aria-label="Ink colour">
+      <button class="sw sel" style="background:#d1402c" data-ink-color="#d1402c" aria-label="Red"></button>
+      <button class="sw" style="background:#0d6b6e" data-ink-color="#0d6b6e" aria-label="Teal"></button>
+      <button class="sw" style="background:#b1820f" data-ink-color="#b1820f" aria-label="Amber"></button>
+      <button class="sw" style="background:#11242b" data-ink-color="#11242b" aria-label="Black"></button>
+    </div>
+    <div class="line" role="group" aria-label="Thickness">
+      <button class="nib sel" data-ink-width="2.6" aria-label="Thin"><span style="width:18px;height:2px"></span></button>
+      <button class="nib" data-ink-width="5" aria-label="Medium"><span style="width:18px;height:4px"></span></button>
+      <button class="nib" data-ink-width="9" aria-label="Thick"><span style="width:18px;height:8px"></span></button>
+    </div>
+    <div class="line" role="group" aria-label="Tool">
+      <button class="sel" data-ink-tool="pen">pen</button>
+      <button data-ink-tool="hi">marker</button>
+      <button data-ink-tool="line">line</button>
+      <button data-ink-tool="box">box</button>
+      <button data-ink-tool="erase">erase</button>
+    </div>
+    <div class="line">
+      <button id="inkundo" aria-label="Undo last stroke">undo</button>
+      <button id="inkredo" aria-label="Redo">redo</button>
+      <button id="inkclear" aria-label="Clear all ink">clear</button>
+      <button id="inksave" aria-label="Save ink as a PNG">save</button>
+    </div>
+    <div class="line">
+      <button id="inkpalm" aria-pressed="false" aria-label="Stylus only, ignore finger touches">stylus only</button>
+    </div>
+    <p class="hint" id="inkhint"></p>
+  </div>
+  <button class="pen" id="inkpen" aria-pressed="false">✎&nbsp; Pen</button>
+</div>
+
 <script>
 /* ============ math + answer checking ============ */
 const SUP = {'\u2070':'0','\u00b9':'1','\u00b2':'2','\u00b3':'3','\u2074':'4','\u2075':'5','\u2076':'6','\u2077':'7','\u2078':'8','\u2079':'9'};
@@ -396,7 +458,7 @@ function boot(app){
   APP=app;
   if(app.startTab) TAB=app.startTab;
   app.problems.forEach(p=>{ BY[p.id]=p; ST[p.id]={steps:p.steps.map(()=>({attempts:0,state:'open',work:'',ans:''})),
-    log:[], submitted:false, seconds:0}; });
+    log:[], submitted:false, seconds:0, ink:[]}; });
   buildSide(); buildPicker();
   wire();
   open(BY[wantedId()] ? wantedId() : app.problems[0].id);
@@ -468,8 +530,9 @@ function hop(d){
 }
 
 function open(pid){
-  if(CUR) save();
+  if(CUR){ save(); if(window.INK) ST[CUR].ink=window.INK.get(); }
   CUR=pid; STEP=0;
+  if(window.INK) window.INK.set(ST[pid].ink||[]);
   if(TAB==='concept' && !BY[pid].concept) TAB='problem';
   $('picker').value=pid;
   disarm();
@@ -673,6 +736,246 @@ function finalAnswer(){
   const p=BY[CUR];
   say('head','verified answer \u2014 '+esc(p.label)+'<span class="ans">'+p.answer+'</span>'+p.explain);
 }
+</script>
+<script>
+/* Teaching pen.
+
+   Performance model: two viewport-sized canvases. Finished strokes live on the
+   committed layer and are never redrawn while drawing; the stroke in progress
+   is appended segment by segment to a live layer, so the per-frame cost is the
+   handful of new points, not the whole page of ink. In document mode the ink is
+   stored in page coordinates and the layers are re-rendered with a translate
+   when the page scrolls, which keeps both canvases small and sharp instead of
+   allocating one the height of the document.
+
+   window.INK exposes get/set so the host page can hold ink per problem.
+   data-ink-mode="document" on <body> anchors ink to the content. */
+(function(){
+  var cvC=document.getElementById('inkpad'), cvL=document.getElementById('inklive'),
+      tools=document.getElementById('inktools'), penBtn=document.getElementById('inkpen'),
+      hint=document.getElementById('inkhint'), palmBtn=document.getElementById('inkpalm');
+  if(!cvC||!cvL) return;
+  var cx=cvC.getContext('2d'), lx=cvL.getContext('2d');
+  if(!cx||!lx) return;
+
+  var DOC = (document.body.getAttribute('data-ink-mode')==='document');
+  var strokes=[], undone=[], cur=null, drawn=0, on=false;
+  var color='#d1402c', width=2.6, tool='pen', palm=false;
+  var dpr=1, W=0, H=0, ox=0, oy=0, pending=false, needFull=false;
+
+  hint.textContent = DOC
+    ? 'Ink sticks to the page, so you can scroll while drawing. A finger scrolls; the pen draws.'
+    : 'Drawing freezes the panes. Turn the pen off to scroll or type.';
+
+  function scrollOff(){
+    if(!DOC) return [0,0];
+    return [window.pageXOffset||0, window.pageYOffset||0];
+  }
+  function frame(ctx){
+    ctx.setTransform(dpr,0,0,dpr,-ox*dpr,-oy*dpr);
+  }
+  function geom(){
+    dpr=Math.min(window.devicePixelRatio||1, 2);
+    W=window.innerWidth; H=window.innerHeight;
+    [cvC,cvL].forEach(function(c){
+      c.width=Math.floor(W*dpr); c.height=Math.floor(H*dpr);
+      c.style.width=W+'px'; c.style.height=H+'px';
+    });
+    var s=scrollOff(); ox=s[0]; oy=s[1];
+    frame(cx); frame(lx);
+    repaint();
+  }
+  function wipe(ctx,c){
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,c.width,c.height);
+    frame(ctx);
+  }
+
+  /* ---------- geometry of one stroke ---------- */
+  function widthAt(a,b,base){
+    var d=Math.abs(b.x-a.x)+Math.abs(b.y-a.y);
+    var f=1-Math.min(d,34)/34*0.38;          /* faster stroke, finer line */
+    return base*(0.66+0.34*f*1.2);
+  }
+  function penSeg(ctx,a,b,s){
+    var w=widthAt(a,b,s.width);
+    b.w = w = a.w ? (a.w*0.6+w*0.4) : w;
+    ctx.strokeStyle=s.color; ctx.lineWidth=w; ctx.lineJoin=ctx.lineCap='round';
+    ctx.beginPath();
+    ctx.moveTo(a.x,a.y);
+    ctx.quadraticCurveTo(a.x,a.y,(a.x+b.x)/2,(a.y+b.y)/2);
+    ctx.lineTo(b.x,b.y);
+    ctx.stroke();
+  }
+  function bandSeg(ctx,a,b,s,w,style,comp){
+    ctx.globalCompositeOperation=comp||'source-over';
+    ctx.globalAlpha = (s.tool==='hi') ? 0.30 : 1;
+    ctx.strokeStyle=style; ctx.lineWidth=w; ctx.lineJoin=ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+    ctx.globalAlpha=1; ctx.globalCompositeOperation='source-over';
+  }
+  function shape(ctx,s){
+    var a=s.p[0], b=s.p[s.p.length-1];
+    ctx.strokeStyle=s.color; ctx.lineWidth=s.width; ctx.lineJoin=ctx.lineCap='round';
+    ctx.beginPath();
+    if(s.tool==='line'){ ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); }
+    else { ctx.rect(Math.min(a.x,b.x),Math.min(a.y,b.y),Math.abs(b.x-a.x),Math.abs(b.y-a.y)); }
+    ctx.stroke();
+  }
+  /* draw stroke segments [from, end) onto ctx */
+  function drawFrom(ctx,s,from){
+    var p=s.p;
+    if(!p.length) return;
+    if(s.tool==='line'||s.tool==='box'){ shape(ctx,s); return; }
+    if(p.length===1){
+      var dot={x:p[0].x+0.01,y:p[0].y};
+      if(s.tool==='erase') bandSeg(ctx,p[0],dot,s,Math.max(18,s.width*6),'rgba(0,0,0,1)','destination-out');
+      else if(s.tool==='hi') bandSeg(ctx,p[0],dot,s,Math.max(14,s.width*4.5),s.color);
+      else penSeg(ctx,p[0],dot,s);
+      return;
+    }
+    for(var i=Math.max(1,from); i<p.length; i++){
+      if(s.tool==='erase') bandSeg(ctx,p[i-1],p[i],s,Math.max(18,s.width*6),'rgba(0,0,0,1)','destination-out');
+      else if(s.tool==='hi') bandSeg(ctx,p[i-1],p[i],s,Math.max(14,s.width*4.5),s.color);
+      else penSeg(ctx,p[i-1],p[i],s);
+    }
+  }
+  function repaint(){                       /* committed layer, whole page of ink */
+    wipe(cx,cvC);
+    for(var i=0;i<strokes.length;i++){ resetWidths(strokes[i]); drawFrom(cx,strokes[i],1); }
+  }
+  function resetWidths(s){ for(var i=0;i<s.p.length;i++) s.p[i].w=0; }
+
+  /* ---------- frame loop: only the live stroke ---------- */
+  function tick(){
+    pending=false;
+    if(needFull){ needFull=false; var s=scrollOff(); ox=s[0]; oy=s[1]; frame(cx); frame(lx); repaint();
+      wipe(lx,cvL); if(cur){ resetWidths(cur); drawFrom(lx,cur,1); drawn=cur.p.length; } return; }
+    if(!cur) return;
+    if(cur.tool==='line'||cur.tool==='box'){ wipe(lx,cvL); shape(lx,cur); return; }
+    if(cur.p.length>drawn){ drawFrom(lx,cur,Math.max(1,drawn)); drawn=cur.p.length; }
+  }
+  function schedule(){
+    if(pending) return;
+    pending=true;
+    if(window.requestAnimationFrame) requestAnimationFrame(tick); else tick();
+  }
+
+  /* ---------- pointer ---------- */
+  function pt(e){ return {x:e.clientX+ox, y:e.clientY+oy, w:0}; }
+  function usable(e){ return on && !(palm && e.pointerType==='touch'); }
+
+  cvC.addEventListener('pointerdown',function(e){
+    if(!usable(e)) return;
+    e.preventDefault();
+    try{ cvC.setPointerCapture(e.pointerId); }catch(err){}
+    var t = (e.shiftKey && (tool==='pen'||tool==='hi')) ? 'line' : tool;
+    cur={tool:t,color:color,width:width,p:[pt(e)]};
+    drawn=0; undone=[];
+    schedule();
+  });
+  cvC.addEventListener('pointermove',function(e){
+    if(!cur || !usable(e)) return;
+    e.preventDefault();
+    var list = (e.getCoalescedEvents && e.getCoalescedEvents().length) ? e.getCoalescedEvents() : [e];
+    for(var i=0;i<list.length;i++){
+      var q=pt(list[i]), last=cur.p[cur.p.length-1];
+      if(cur.tool==='line'||cur.tool==='box') cur.p[1]=q;
+      else if(Math.abs(q.x-last.x)+Math.abs(q.y-last.y) >= 1.1) cur.p.push(q);
+    }
+    schedule();
+  });
+  function commit(){
+    if(!cur) return;
+    /* one pass onto the committed layer, then the live layer is cheap to wipe */
+    resetWidths(cur);
+    drawFrom(cx,cur,1);
+    strokes.push(cur);
+    cur=null; drawn=0;
+    wipe(lx,cvL);
+  }
+  cvC.addEventListener('pointerup',commit);
+  cvC.addEventListener('pointercancel',commit);
+  cvC.addEventListener('lostpointercapture',commit);
+  cvC.addEventListener('wheel',function(e){ if(on && !DOC) e.preventDefault(); },{passive:false});
+  cvC.addEventListener('touchmove',function(e){ if(on && !DOC) e.preventDefault(); },{passive:false});
+
+  if(DOC) window.addEventListener('scroll',function(){ needFull=true; schedule(); },{passive:true});
+
+  /* ---------- controls ---------- */
+  function setPen(v){
+    on=v;
+    cvC.classList.toggle('on',on);
+    if(DOC) cvC.classList.add('doc');
+    tools.classList.toggle('open',on);
+    penBtn.classList.toggle('on',on);
+    penBtn.setAttribute('aria-pressed',on?'true':'false');
+    penBtn.innerHTML = on ? '\u270e&nbsp; Pen on' : '\u270e&nbsp; Pen';
+    document.body.style.userSelect = on ? 'none' : '';
+    if(on){ needFull=true; schedule(); }
+  }
+  function pick(sel,el){
+    var list=document.querySelectorAll(sel);
+    for(var i=0;i<list.length;i++) list[i].classList.remove('sel');
+    el.classList.add('sel');
+  }
+  penBtn.addEventListener('click',function(){ setPen(!on); });
+  document.getElementById('inkundo').addEventListener('click',function(){
+    if(strokes.length){ undone.push(strokes.pop()); repaint(); } });
+  document.getElementById('inkredo').addEventListener('click',function(){
+    if(undone.length){ strokes.push(undone.pop()); repaint(); } });
+  document.getElementById('inkclear').addEventListener('click',function(){
+    undone=strokes.slice().reverse(); strokes=[]; repaint(); });
+  document.getElementById('inksave').addEventListener('click',function(){
+    try{
+      var out=document.createElement('canvas');
+      out.width=cvC.width; out.height=cvC.height;
+      var c2=out.getContext('2d');
+      c2.fillStyle='#fff'; c2.fillRect(0,0,out.width,out.height);
+      c2.drawImage(cvC,0,0); c2.drawImage(cvL,0,0);
+      var a=document.createElement('a');
+      a.download='ink.png'; a.href=out.toDataURL('image/png'); a.click();
+    }catch(err){}
+  });
+  palmBtn.addEventListener('click',function(){
+    palm=!palm; palmBtn.classList.toggle('sel',palm);
+    palmBtn.setAttribute('aria-pressed',palm?'true':'false');
+  });
+  var cs=document.querySelectorAll('[data-ink-color]');
+  for(var i=0;i<cs.length;i++) (function(b){
+    b.addEventListener('click',function(){ color=b.getAttribute('data-ink-color'); pick('[data-ink-color]',b); });
+  })(cs[i]);
+  var ws=document.querySelectorAll('[data-ink-width]');
+  for(var j=0;j<ws.length;j++) (function(b){
+    b.addEventListener('click',function(){ width=parseFloat(b.getAttribute('data-ink-width')); pick('[data-ink-width]',b); });
+  })(ws[j]);
+  var ts=document.querySelectorAll('[data-ink-tool]');
+  for(var k=0;k<ts.length;k++) (function(b){
+    b.addEventListener('click',function(){ tool=b.getAttribute('data-ink-tool'); pick('[data-ink-tool]',b); });
+  })(ts[k]);
+
+  document.addEventListener('keydown',function(e){
+    var t=e.target, typing = t && (t.tagName==='TEXTAREA'||t.tagName==='INPUT'||t.tagName==='SELECT');
+    if(e.key==='Escape' && on){ setPen(false); return; }
+    if(typing) return;
+    if(e.key==='p'||e.key==='P') setPen(!on);
+    if(on && (e.key==='z'||e.key==='Z') && (e.ctrlKey||e.metaKey)){
+      e.preventDefault();
+      if(e.shiftKey){ if(undone.length){ strokes.push(undone.pop()); repaint(); } }
+      else if(strokes.length){ undone.push(strokes.pop()); repaint(); }
+    }
+  });
+  window.addEventListener('resize',geom);
+  window.addEventListener('load',geom);
+
+  window.INK = {
+    get:function(){ return strokes; },
+    set:function(list){ strokes=list||[]; undone=[]; cur=null; wipe(lx,cvL); repaint(); },
+    resize:geom,
+    isOn:function(){ return on; }
+  };
+  geom();
+})();
 </script>
 <script>boot({"groups": [{"title": "1. Primes and composites", "items": ["g1"]}, {"title": "2. Prime factorization", "items": ["g2"]}, {"title": "3. Reading factors off the factorization", "items": ["g3"]}, {"title": "4. Greatest common factor", "items": ["g4"]}, {"title": "5. Least common multiple", "items": ["g5"]}, {"title": "6. The GCF × LCM shortcut", "items": ["g6"]}, {"title": "7. Working backwards", "items": ["g7"]}, {"title": "8. Primes hiding in equations", "items": ["g8", "g8b", "g8c"]}, {"title": "9. Squares, cubes and exponents", "items": ["g9"]}, {"title": "10. Word problems: which tool?", "items": ["g10", "g11", "g12"]}], "problems": [{"id": "g1", "label": "Try it · primes", "prompt": "Is 91 prime? If it is not, write it as a product of primes.", "src": "", "steps": [{"ask": "Is 91 prime? Answer yes or no, and say which divisors you tested.", "type": "text", "answer": "no", "nudges": ["9² = 81 and 10² = 100, so you only need primes up to 9: 2, 3, 5, 7.", "91 is odd, its digits add to 10 (not a multiple of 3), and it does not end in 0 or 5. One test is left.", "Try 7: 7 × 13 = 91."], "hint": "7 divides 91, so 91 is composite.", "solution": "No — 91 is not prime, because 7 × 13 = 91.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "yes or no", "reject": ["^\\s*yes\\b", "^\\s*yep\\b"], "rejectNote": "Test 7 as a divisor before you answer.", "near": [["^\\s*yes\\b", "Test 7 before you decide."]], "re": ["^\\s*no\\b", "\\bno largest\\b", "\\bnot\\b", "\\bunbounded\\b", "infinit", "forever", "as (big|large) as", "keep going", "never ends", "none", "\\bcomposite\\b"]}, {"ask": "Write 91 as a product of primes.", "type": "factor", "answer": "7*13", "nudges": ["You found one factor already. What is 91 ÷ 7?", "91 ÷ 7 = 13. Is 13 prime?", "Both pieces are prime, so you are done."], "hint": "You already found a divisor. Divide 91 by it and check that both pieces are prime.", "solution": "91 = 7 · 13.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "like 2^4*7^2"}], "answer": "91 = 7 · 13, so it is composite", "explain": "Numbers like 91 look prime but are not. Test every prime up to the square root: for 91 that means 2, 3, 5, 7 — and 7 works.", "concept": "<p class=\"tag\">Idea 1</p>\n  <h2>Primes and composites</h2>\n  <p>A <b>prime</b> is a whole number with exactly two positive divisors: 1 and itself.\n  A <b>composite</b> has more than two. The number 1 is neither — it has only one divisor.</p>\n  <p>Think of primes as bricks. Factoring a number shows which bricks it was built from:\n  66 = 2 · 33 = 2 · 3 · 11, and none of 2, 3, 11 can be broken down further. That is also why\n  1 is kept out. If 1 counted as prime you could write 66 = 1 · 1 · 1 · 2 · 3 · 11 and add as\n  many 1s as you liked — the list of bricks would stop being one fixed list, and every rule in\n  this lesson depends on it being fixed.</p>\n  <div class=\"stack\">primes:     2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, …\ncomposites: 4, 6, 8, 9, 10, 12, 14, 15, 16, 18, 20, 21, 22, 24, …</div>\n  <p>2 is the only even prime. Every other even number has 2 as a factor, so it already has three\n  factors at least. That single fact solves a surprising number of competition problems — you will\n  use it in Idea 8.</p>\n  <h3>Fast divisibility checks</h3>\n  <table class=\"cmp\">\n    <tr><th>Divisor</th><th>Test</th><th>Example</th></tr>\n    <tr><td>2</td><td>last digit is even</td><td>440 ✓</td></tr>\n    <tr><td>3</td><td>digits add to a multiple of 3</td><td>594 → 5+9+4 = 18 ✓</td></tr>\n    <tr><td>4</td><td>last two digits form a multiple of 4</td><td>616 → 16 ✓</td></tr>\n    <tr><td>5</td><td>ends in 0 or 5</td><td>2020 ✓</td></tr>\n    <tr><td>6</td><td>passes both the 2 test and the 3 test</td><td>594 ✓</td></tr>\n    <tr><td>9</td><td>digits add to a multiple of 9</td><td>225 → 9 ✓</td></tr>\n    <tr><td>11</td><td>alternating digit sum is a multiple of 11</td><td>616 → 6 − 1 + 6 = 11 ✓</td></tr>\n  </table>\n  <div class=\"rulebox\"><p><b>How far do you have to test?</b> Only up to the square root. To check\n  whether 101 is prime you test 2, 3, 5 and 7 — and stop, because 11 × 11 = 121 is already past 101.\n  If a number had a factor bigger than its square root, the matching partner factor would be smaller,\n  and you would have found it already.</p></div>", "short": "primes", "tags": [{"t": "Idea 1", "k": "set"}, {"t": "Primes and composites", "k": ""}, {"t": "guided", "k": "core"}]}, {"id": "g2", "label": "Try it · factor trees", "prompt": "Build the prime factorization of 120 two different ways.", "src": "", "steps": [{"ask": "Write 120 as a product of primes, using exponents.", "type": "factor", "answer": "2^3*3*5", "nudges": ["Find any divisor you can see. Does 2 go into 120? Does 3? Does 5?", "Keep splitting every piece that is not prime. Stop only when every piece on the tree is prime.", "Multiply your pieces back together — you must land exactly on 120."], "hint": "Any starting split works: 12 × 10, or 4 × 30, or 8 × 15. Break each part down until every piece is prime.", "solution": "120 = 2³ · 3 · 5", "recheck": "Redo this step on paper before you close the page.", "placeholder": "like 2^4*7^2", "why": "Every number has exactly one prime factorization, so this is the one right answer.", "forward": "you now have the primes you need"}, {"ask": "Now build it again starting from a different factor pair. Do you get the same primes? Answer yes or no.", "type": "text", "answer": "yes", "nudges": ["4 = 2 · 2 and 30 = 2 · 3 · 5. Collect the leaves.", "You get three 2s, one 3, one 5 — compare that with your first tree.", "The order of the branches changed, but the pile of primes did not."], "hint": "Both routes end with 2 · 2 · 2 · 3 · 5.", "solution": "Yes — every route gives 2³ · 3 · 5.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "yes or no", "re": ["^\\s*yes\\b", "\\bthere is\\b", "\\bexists\\b", "\\byep\\b", "\\byeah\\b", "\\bsame\\b", "\\bidentical\\b", "\\bequal\\b"], "reject": ["^\\s*no\\b", "\\bnot\\b", "\\bnope\\b"]}], "answer": "120 = 2³ · 3 · 5, whichever split you start with", "explain": "This is the Fundamental Theorem of Arithmetic: a number has exactly one prime factorization, apart from the order you write it in. So you can always start with the easiest split you spot.", "concept": "<p class=\"tag\">Idea 2</p>\n  <h2>Prime factorization</h2>\n  <p>The prime factorization of a number is that number written as a product of primes.\n  You find it with a <b>factor tree</b>: split the number into any two factors, then keep\n  splitting anything that is not yet prime.</p>\n  <div class=\"two\">\n    <div class=\"stack\">440\n = 44 · 10\n = (4 · 11) · (2 · 5)\n = 2 · 2 · 11 · 2 · 5\n = 2³ · 5 · 11</div>\n    <div class=\"stack\">440\n = 8 · 55\n = (2 · 2 · 2) · (5 · 11)\n = 2 · 2 · 2 · 5 · 11\n = 2³ · 5 · 11</div>\n  </div>\n  <p>Two different starts, one answer. That is not luck.</p>\n  <div class=\"rulebox\"><p><b>Unique factorization.</b> Every whole number above 1 has exactly one\n  prime factorization, apart from the order of the factors. So you may always begin with the easiest\n  split you can see — the answer cannot depend on your route.</p></div>\n  <p><b>Exponent notation</b> is just shorthand for repeats:\n  <span class=\"m\">2 · 2 · 2 = 2^3</span>. The small number counts how many copies of the prime\n  there are. Keeping the exponents visible is what makes the next four ideas easy.</p>", "short": "factor trees", "tags": [{"t": "Idea 2", "k": "set"}, {"t": "Prime factorization", "k": ""}, {"t": "guided", "k": "core"}]}, {"id": "g3", "label": "Try it · counting factors", "prompt": "How many factors does 72 have?", "src": "", "steps": [{"ask": "Write <span class='m'>72</span> as a product of prime numbers.", "type": "factor", "answer": "2^3*3^2", "nudges": ["Find any divisor you can see. Does 2 go into 72? Does 3? Does 5?", "Keep splitting every piece that is not prime. Stop only when every piece on the tree is prime.", "Multiply your pieces back together — you must land exactly on 72."], "hint": "Start the tree with 72 = 8 × 9, then break each of those two numbers down.", "solution": "72 = 2³ · 3²", "recheck": "Redo this step on paper before you close the page.", "placeholder": "like 2^4*7^2", "why": "Every number has exactly one prime factorization, so this is the one right answer.", "forward": "you now have the primes you need"}, {"ask": "How many factors does 72 have?", "type": "num", "answer": 12, "nudges": ["Count the choices for the 2s: 0, 1, 2 or 3 — that is 4 choices.", "Count the choices for the 3s: 0, 1 or 2 — that is 3 choices.", "Every pair of choices makes a different factor, so multiply 4 × 3."], "hint": "A factor is built by choosing how many of each prime to take. Count the choices for the 2s, count the choices for the 3s, and multiply.", "solution": "72 has 12 factors.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "a number", "why": "The 12 factors are 1, 2, 3, 4, 6, 8, 9, 12, 18, 24, 36, 72."}], "answer": "12 factors", "explain": "72 = 2³ · 3². A factor is built by choosing how many of each prime to take, so the count is (3 + 1)(2 + 1) = 12. Listing them confirms it: 1, 2, 3, 4, 6, 8, 9, 12, 18, 24, 36, 72.", "concept": "<p class=\"tag\">Idea 3</p>\n  <h2>Reading factors off the factorization</h2>\n  <p>Here is the key move behind everything that follows. Since 440 = 2 · 2 · 2 · 5 · 11,\n  <b>every factor of 440 is a group chosen from that pile</b> — up to three 2s, maybe the 5,\n  maybe the 11. Choosing nothing gives the factor 1.</p>\n  <div class=\"stack\">pick nothing        → 1\npick 2              → 2\npick 2 · 2          → 4\npick 2 · 5          → 10\npick 2 · 2 · 2 · 11  → 88\npick everything     → 440</div>\n  <p>Choosing nothing at all is worth a mention: the empty group has value 1, which is exactly why\n  1 is a factor of every number.</p>\n  <p>So the exponents tell you how many factors a number has. For 72 = 2³ · 3² you may take\n  0, 1, 2 or 3 twos (four choices) and 0, 1 or 2 threes (three choices), giving\n  4 × 3 = 12 factors.</p>\n  <div class=\"rulebox\"><p><b>Factor count.</b> Add 1 to every exponent, then multiply.\n  For 2³ · 3² that is (3+1)(2+1) = 12.</p></div>", "short": "counting factors", "tags": [{"t": "Idea 3", "k": "set"}, {"t": "Reading factors off the factorization", "k": ""}, {"t": "guided", "k": "core"}]}, {"id": "g4", "label": "Try it · GCF", "prompt": "Find the greatest common factor of 84 and 126.", "src": "", "steps": [{"ask": "Write <span class='m'>84</span> as a product of prime numbers.", "type": "factor", "answer": "2^2*3*7", "nudges": ["Find any divisor you can see. Does 2 go into 84? Does 3? Does 5?", "Keep splitting every piece that is not prime. Stop only when every piece on the tree is prime.", "Multiply your pieces back together — you must land exactly on 84."], "hint": "Start the tree with 84 = 4 × 21, then break each of those two numbers down.", "solution": "84 = 2² · 3 · 7", "recheck": "Redo this step on paper before you close the page.", "placeholder": "like 2^4*7^2", "why": "Every number has exactly one prime factorization, so this is the one right answer.", "forward": "you now have the primes you need"}, {"ask": "Write <span class='m'>126</span> as a product of prime numbers.", "type": "factor", "answer": "2*3^2*7", "nudges": ["Find any divisor you can see. Does 2 go into 126? Does 3? Does 5?", "Keep splitting every piece that is not prime. Stop only when every piece on the tree is prime.", "Multiply your pieces back together — you must land exactly on 126."], "hint": "Start the tree with 126 = 2 × 63, then break each of those two numbers down.", "solution": "126 = 2 · 3² · 7", "recheck": "Redo this step on paper before you close the page.", "placeholder": "like 2^4*7^2", "why": "Every number has exactly one prime factorization, so this is the one right answer.", "forward": "you now have the primes you need"}, {"ask": "What is GCF(84, 126)?", "type": "num", "answer": 42, "nudges": ["Shared primes: 2, 3 and 7 — all three appear in both.", "Smaller powers: 2¹ (not 2²) and 3¹ (not 3²), and 7¹.", "2 × 3 × 7 = ?"], "hint": "Multiply the smaller power of each shared prime.", "solution": "GCF(84, 126) = 42.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "a number", "why": "Check: 84 = 42 × 2 and 126 = 42 × 3."}], "answer": "GCF(84, 126) = 2 · 3 · 7 = 42", "explain": "84 = 2² · 3 · 7, 126 = 2 · 3² · 7. Smaller exponent of each shared prime: 2¹, 3¹, 7¹ → 42. Check: 84 ÷ 42 = 2 and 126 ÷ 42 = 3, and those results share no factor, which is the sign you took the greatest one.", "concept": "<p class=\"tag\">Idea 4</p>\n  <h2>Greatest common factor</h2>\n  <p>Read the name backwards: <b>factor</b> means divisor, <b>common</b> means shared,\n  <b>greatest</b> means largest — the largest divisor the two numbers share.\n  A <b>common factor</b> is a group you could pick from either pile.\n  Line up the two factorizations and the answer stares back at you.</p>\n  <div class=\"stack\">440  = 2 · 2 · 2 · 5 · 11\n2020 = 2 · 2 · 5 · 101\n       └─────┬────┘\n   shared: 2 · 2 · 5  =  20</div>\n  <p>440 can spare three 2s but 2020 only has two, so a shared group may use two 2s at most.\n  Both have one 5. The 11 and the 101 are unshared, so they cannot appear in a common factor at all.</p>\n  <div class=\"rulebox\"><p><b>GCF rule.</b> Keep only the primes that appear in <em>both</em> numbers,\n  each at its <b>smaller</b> power, and multiply. GCF(440, 2020) = 2² · 5 = 20.\n  If a prime has the same exponent in both numbers, either copy gives the same thing.</p></div>", "short": "GCF", "tags": [{"t": "Idea 4", "k": "set"}, {"t": "Greatest common factor", "k": ""}, {"t": "guided", "k": "core"}]}, {"id": "g5", "label": "Try it · LCM", "prompt": "Find the least common multiple of 84 and 126.", "src": "", "steps": [{"ask": "Write LCM(84, 126) as a product of prime powers.", "type": "factor", "answer": "2^2*3^2*7", "nudges": ["Take every prime that appears: 2, 3, 7.", "Keep the bigger exponent of each: 2² from 84, 3² from 126, 7¹ from either.", "Do not multiply the two numbers together — that double-counts the shared part."], "hint": "Go prime by prime across 84 = 2² · 3 · 7 and 126 = 2 · 3² · 7, keeping the larger exponent each time.", "solution": "LCM = 2² · 3² · 7.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "like 2^4*7^2"}, {"ask": "What is LCM(84, 126) as a single number?", "type": "num", "answer": 252, "nudges": ["4 × 9 = 36, then 36 × 7.", "4 × 9 = 36. Now multiply that by 7.", "Check your result: it has to divide exactly by both 84 and 126."], "hint": "4 · 9 · 7.", "solution": "LCM(84, 126) = 252.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "a number"}], "answer": "LCM(84, 126) = 2² · 3² · 7 = 252", "explain": "Bigger exponent of every prime present. Check with the identity: GCF × LCM = 42 × 252 = 10,584 = 84 × 126.", "concept": "<p class=\"tag\">Idea 5</p>\n  <h2>Least common multiple</h2>\n  <p>Flip the question. A <b>multiple</b> of 440 must contain everything 440 contains: three 2s,\n  a 5, an 11. A multiple of 2020 must contain two 2s, a 5, a 101. A number that is a multiple of\n  both must satisfy both demands at once — and the smallest such number does no more than that.</p>\n  <div class=\"stack\">440  needs  2 · 2 · 2 · 5 · 11\n2020 needs  2 · 2     · 5      · 101\nLCM  =      2 · 2 · 2 · 5 · 11 · 101  =  44,440</div>\n  <p>Another way to see it: start with everything 440 needs. Two of its 2s and its 5 already cover\n  what 2020 demands, so the only thing still missing is the 101. Shared factors do not get duplicated\n  just because both numbers happen to contain them.</p>\n  <div class=\"rulebox\"><p><b>LCM rule.</b> Take <em>every</em> prime that appears in either number,\n  each at its <b>bigger</b> power, and multiply. Dropping a prime because it appears in only one\n  number is the most common mistake here — the LCM still needs it.</p></div>\n  <table class=\"cmp\">\n    <tr><th></th><th>GCF</th><th>LCM</th></tr>\n    <tr><td>which primes</td><td>only the shared ones</td><td>all of them</td></tr>\n    <tr><td>which power</td><td>the smaller</td><td>the bigger</td></tr>\n    <tr><td>size</td><td>no bigger than either number</td><td>no smaller than either number</td></tr>\n  </table>\n  <p>One convention makes both rules read the same way: if a prime is missing from a number, treat its\n  exponent there as 0. Then 11 has exponent 0 in 2020, and “smaller of 1 and 0” correctly keeps 11 out\n  of the GCF while “bigger of 1 and 0” correctly puts it into the LCM. Every prime, every time —\n  minimum for the GCF, maximum for the LCM.</p>", "short": "LCM", "tags": [{"t": "Idea 5", "k": "set"}, {"t": "Least common multiple", "k": ""}, {"t": "guided", "k": "core"}]}, {"id": "g6", "label": "Try it · the shortcut", "prompt": "GCF(48, 180) = 12. Use a · b = GCF · LCM to find LCM(48, 180) without factoring anything new.", "src": "", "steps": [{"ask": "What is 48 × 180?", "type": "num", "answer": 8640, "nudges": ["48 × 180 = 48 × 18 × 10.", "48 × 18 = 864.", "Now attach the 10."], "hint": "48 × 18 = 864. Now put the factor of 10 back.", "solution": "48 × 180 = 8640.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "a number"}, {"ask": "What is LCM(48, 180)?", "type": "num", "answer": 720, "nudges": ["The identity says LCM = (a · b) ÷ GCF.", "8640 ÷ 12.", "8640 ÷ 12 = 8640 ÷ 6 ÷ 2 = 1440 ÷ 2."], "hint": "The identity gives LCM = (a · b) ÷ GCF, and you already have the product.", "solution": "LCM(48, 180) = 720.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "a number", "why": "Factoring agrees: 48 = 2⁴ · 3, 180 = 2² · 3² · 5, LCM = 2⁴ · 3² · 5 = 720."}], "answer": "LCM(48, 180) = 8640 ÷ 12 = 720", "explain": "a · b = GCF · LCM holds for every pair of positive integers, so once you know one of GCF and LCM the other is a single division. Verified by factoring: 2⁴ · 3² · 5 = 720.", "concept": "<p class=\"tag\">Idea 6</p>\n  <h2>The GCF × LCM shortcut</h2>\n  <p>Look at what the two rules do to one prime. If one number has 2³ and the other has 2², then\n  the GCF takes 2² and the LCM takes 2³ — between them they use exactly the same 2s as the two\n  original numbers. That happens for every prime, so:</p>\n  <div class=\"stack\">120 = 2³ · 3 · 5        GCF(120, 300) = 2² · 3 · 5  =  60\n300 = 2² · 3 · 5²       LCM(120, 300) = 2³ · 3 · 5² =  600\n\n120 · 300 = 36,000        60 · 600 = 36,000</div>\n  <div class=\"rulebox\"><p><b>Identity.</b> For any positive integers a and b:\n  <span class=\"m\">a · b = GCF(a, b) · LCM(a, b)</span>. Know any three of the four and the fourth\n  is one division away. It is also the fastest way to check work you have already done.</p></div>", "short": "the shortcut", "tags": [{"t": "Idea 6", "k": "set"}, {"t": "The GCF × LCM shortcut", "k": ""}, {"t": "guided", "k": "core"}]}, {"id": "g7", "label": "Try it · working backwards", "prompt": "GCF(36, n) = 9. What is the smallest n? Is there a largest?", "src": "", "steps": [{"ask": "What is the smallest n that works?", "type": "num", "answer": 9, "nudges": ["n must contain 3², or the GCF could not reach 9.", "n must contain no 2 — otherwise the GCF would pick up a factor of 2 and be 18 or 36.", "The smallest choice is 3² and nothing else at all — work that number out."], "hint": "36 = 2² · 3² and 9 = 3². Work out what n must contain and what it must avoid.", "solution": "The smallest n is 9, and GCF(36, 9) = 9.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "a number"}, {"ask": "Is there a largest n? Answer yes or no, with a reason.", "type": "text", "answer": "no", "nudges": ["Try n = 45 = 3² · 5. What is GCF(36, 45)?", "36 has no 5, so the extra 5 changes nothing: the GCF is still 9.", "You can keep attaching new primes: 45, 63, 99 … all still give 9."], "hint": "Primes that 36 does not own are free to pile up in n.", "solution": "No largest — for example n = 9 · 5ᵏ always gives GCF 9.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "yes or no", "reject": ["^\\s*yes\\b", "^\\s*yep\\b"], "rejectNote": "Check GCF(36, 45) first — it is still 9.", "near": [["^\\s*yes\\b", "Check GCF(36, 45) before you settle on yes."]], "re": ["^\\s*no\\b", "\\bno largest\\b", "\\bnot\\b", "\\bunbounded\\b", "infinit", "forever", "as (big|large) as", "keep going", "never ends", "none", "\\bcomposite\\b"]}], "answer": "Smallest n = 9; there is no largest", "explain": "Conditions on n: exactly 3², no factor 2, any other prime allowed. Smallest is 9. Since 36 = 2² · 3² owns only the primes 2 and 3, any other prime can be multiplied in for free — GCF(36, 45) = 9, GCF(36, 63) = 9 — so n has no upper bound.", "concept": "<p class=\"tag\">Idea 7</p>\n  <h2>Working backwards</h2>\n  <p>Harder questions give you the GCF or LCM and ask what the mystery number could be.\n  Translate the condition into rules about exponents, one prime at a time.</p>\n  <h3>Given a GCF</h3>\n  <div class=\"stack\">GCF(240, n) = 12        240 = 2⁴ · 3 · 5,  12 = 2² · 3\nn must have 2² exactly  (2¹ → GCF loses a 2;  2³ → GCF gains one)\nn must have 3¹ or more  (needed for the 3 in 12)\nn must have no 5        (240 has a 5; sharing it would enlarge the GCF)\nother primes: free      (240 has no 7, 11, 13 … so they change nothing)</div>\n  <p>Smallest n = 2² · 3 = 12. Largest? There is none: n = 12 · 7ᵏ keeps the GCF at 12 forever.</p>\n  <h3>Given an LCM</h3>\n  <div class=\"stack\">LCM(225, n) = 1800      225 = 3² · 5²,  1800 = 2³ · 3² · 5²\nn must have 2³ exactly  (225 has no 2s, so n supplies them all)\nn may have 3⁰⁻², 5⁰⁻²   (225 already covers these)\nn may have nothing else (a new prime would show up in the LCM)</div>\n  <p>Smallest n = 8, largest n = 1800.</p>\n  <div class=\"rulebox\"><p><b>The asymmetry worth remembering.</b> A GCF condition sets a floor\n  but no ceiling, so unwanted primes can be piled on forever and there is no largest n.\n  An LCM condition caps every exponent, so n is boxed in from above.</p></div>", "short": "working backwards", "tags": [{"t": "Idea 7", "k": "set"}, {"t": "Working backwards", "k": ""}, {"t": "guided", "k": "core"}]}, {"id": "g8", "label": "Try it · the only even prime", "prompt": "Find all primes a and b such that 4a + 5b = 54.", "src": "", "steps": [{"ask": "What is b?", "type": "num", "answer": 2, "nudges": ["5b = 54 − 4a, and both 54 and 4a are even, so 5b is even.", "5 is odd, so the factor of 2 has to come from b — b is even.", "Only one prime number is even. That is the one."], "hint": "5b = 54 − 4a = 2(27 − 2a), so 5b is even. Since 5 is odd, b is even — and only one prime is.", "solution": "b = 2.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "a number"}, {"ask": "What is a?", "type": "num", "answer": 11, "nudges": ["4a + 10 = 54, so 4a = 44.", "Divide both sides by 4.", "After dividing, check whether your a is prime."], "hint": "4a = 54 − 10 = 44.", "solution": "a = 11, which is prime.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "a number", "why": "Check: 4(11) + 5(2) = 44 + 10 = 54."}], "answer": "a = 11, b = 2", "explain": "Parity does the work: 5b = 54 − 4a = 2(27 − 2a) is even, and since 5 is odd, b must be even — so b = 2, the only even prime. Then 4a = 44 and a = 11. Check: 44 + 10 = 54.", "concept": "<p class=\"tag\">Idea 8</p>\n  <h2>Primes hiding in equations</h2>\n  <p>Problems like &ldquo;find all primes a, b with 4a + 5b = 54&rdquo; look like algebra with too few\n  equations. The trick is that primes are extremely restricted, so <b>divisibility pins one of\n  them down</b> and the rest is arithmetic.</p>\n  <div class=\"stack\">4a + 5b = 54\n5b = 54 − 4a = 2(27 − 2a)   ← factor the right side\nso 5b is even; 5 is odd, so b is even\nthe only even prime is 2    →  b = 2\n4a + 10 = 54  →  4a = 44  →  a = 11  (prime ✓)</div>\n  <p>The same move works with any shared divisor, not just 2. In\n  <span class=\"m\">4a + 5b + 15c = 75</span>, the terms 5b, 15c and 75 are all multiples of 5,\n  so 4a must be too — and since 4 is not divisible by 5, a is. The only prime multiple of 5 is 5,\n  so a = 5 before you do any work at all.</p>\n  <p>A third move is <b>bounding</b>. In 4a + 5b = 54 both terms are positive, so 5b &lt; 54 and\n  b ≤ 10 — that leaves only 2, 3, 5 and 7 to test. Narrow the field with divisibility or bounds\n  first, then check the few survivors by hand. Guess-and-check is a finishing move, not an opening one.</p>\n  <p>And sometimes the honest answer is that nothing works. If the argument forces b = 3, and that\n  forces a = 93 = 3 · 31, then no prime pair exists. A contradiction you were driven into is a\n  finished proof, not a mistake.</p>\n  <div class=\"rulebox\"><p><b>Two moves to try first.</b> (1) <b>Parity:</b> if the equation forces a\n  prime to be even, that prime is 2. (2) <b>Shared divisor:</b> if every term but one is divisible\n  by d, the last one must be too. And always check your answer really is prime — sometimes the\n  conclusion is &ldquo;no such primes exist&rdquo;.</p></div>", "short": "the only even prime", "tags": [{"t": "Idea 8", "k": "set"}, {"t": "Primes hiding in equations", "k": ""}, {"t": "guided", "k": "core"}]}, {"id": "g8b", "label": "Try it · when the answer is “no solution”", "prompt": "Find all primes a and b such that 9a + 14b = 879.", "src": "", "steps": [{"ask": "What must b be?", "type": "num", "answer": 3, "nudges": ["14b = 879 − 9a = 3(293 − 3a), so 14b is a multiple of 3.", "14 is not divisible by 3, so the 3 has to come from b.", "b is prime and divisible by 3."], "hint": "879 is divisible by 3, so 14b = 879 − 9a = 3(293 − 3a). Since 14 carries no 3, b must.", "solution": "b = 3.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "a number"}, {"ask": "What is a?", "type": "num", "answer": 93, "nudges": ["14 · 3 = 42, so 9a = 879 − 42.", "9a = 837.", "837 ÷ 9 = ?"], "hint": "9a = 879 − 42 = 837, so a = 837 ÷ 9.", "solution": "a = 93.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "a number"}, {"ask": "Is that value of a prime? So what is the answer to the problem?", "type": "text", "answer": "no such primes exist", "nudges": ["Digits of 93 add to 12, a multiple of 3 — so 3 divides 93.", "93 = 3 · 31, so 93 is composite, and a was forced to be 93.", "There was no other choice anywhere in the argument, so the requested primes cannot exist."], "hint": "93 = 3 · 31 is not prime, and b = 3 was forced, so no prime pair works.", "solution": "93 is not prime, so no such primes a and b exist.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "what do you conclude?", "reject": ["^\\s*yes\\b"], "rejectNote": "Add the digits of 93 first.", "re": ["no such", "^\\s*no\\b", "not prime", "\\bnone\\b", "no solution", "\\bimpossible\\b", "31"]}], "answer": "No such primes exist — the argument forces a = 93 = 3 · 31, which is composite", "explain": "Divisibility by 3 forces b = 3 with no alternatives, and then a = 93, which is not prime. A forced contradiction is a complete answer, not a sign you did something wrong. (In class the instructor had meant to write 915: the same argument gives b = 3 and a = 97, which is prime.)", "concept": "<p class=\"tag\">Idea 8</p>\n  <h2>Primes hiding in equations</h2>\n  <p>Problems like &ldquo;find all primes a, b with 4a + 5b = 54&rdquo; look like algebra with too few\n  equations. The trick is that primes are extremely restricted, so <b>divisibility pins one of\n  them down</b> and the rest is arithmetic.</p>\n  <div class=\"stack\">4a + 5b = 54\n5b = 54 − 4a = 2(27 − 2a)   ← factor the right side\nso 5b is even; 5 is odd, so b is even\nthe only even prime is 2    →  b = 2\n4a + 10 = 54  →  4a = 44  →  a = 11  (prime ✓)</div>\n  <p>The same move works with any shared divisor, not just 2. In\n  <span class=\"m\">4a + 5b + 15c = 75</span>, the terms 5b, 15c and 75 are all multiples of 5,\n  so 4a must be too — and since 4 is not divisible by 5, a is. The only prime multiple of 5 is 5,\n  so a = 5 before you do any work at all.</p>\n  <p>A third move is <b>bounding</b>. In 4a + 5b = 54 both terms are positive, so 5b &lt; 54 and\n  b ≤ 10 — that leaves only 2, 3, 5 and 7 to test. Narrow the field with divisibility or bounds\n  first, then check the few survivors by hand. Guess-and-check is a finishing move, not an opening one.</p>\n  <p>And sometimes the honest answer is that nothing works. If the argument forces b = 3, and that\n  forces a = 93 = 3 · 31, then no prime pair exists. A contradiction you were driven into is a\n  finished proof, not a mistake.</p>\n  <div class=\"rulebox\"><p><b>Two moves to try first.</b> (1) <b>Parity:</b> if the equation forces a\n  prime to be even, that prime is 2. (2) <b>Shared divisor:</b> if every term but one is divisible\n  by d, the last one must be too. And always check your answer really is prime — sometimes the\n  conclusion is &ldquo;no such primes exist&rdquo;.</p></div>", "short": "when the answer is “no solution”", "tags": [{"t": "Idea 8", "k": "set"}, {"t": "Primes hiding in equations", "k": ""}, {"t": "guided", "k": "core"}]}, {"id": "g8c", "label": "Try it · two cases, one survives", "prompt": "Find all primes a and b such that 5a + 9b = 10,003.", "src": "", "steps": [{"ask": "How many of the two primes a and b can be even?", "type": "num", "answer": 1, "nudges": ["odd + odd = even and even + even = even, so an odd total needs one even part and one odd part.", "5a is even exactly when a is even; 9b is even exactly when b is even.", "So exactly how many of the two primes can be even?"], "hint": "Both coefficients are odd and the total is odd, and odd + odd = even.", "solution": "Exactly one of them is even, so exactly one of them equals 2.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "a number"}, {"ask": "Take the case a = 2, which gives 9b = 9993. Is that case possible? Answer yes or no.", "type": "text", "answer": "no", "nudges": ["Digit sum: 9 + 9 + 9 + 3.", "A number is divisible by 9 only when its digit sum is a multiple of 9. The digit sum here is 30.", "30 is not a multiple of 9, so this case dies."], "hint": "Test 9993 for divisibility by 9 by adding its digits.", "solution": "No — 9993 is not divisible by 9, so Case 1 has no solution at all.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "yes or no", "reject": ["^\\s*yes\\b"], "rejectNote": "Add the digits: 9 + 9 + 9 + 3.", "re": ["^\\s*no\\b", "\\bnot\\b", "\\b30\\b", "fails", "impossible"]}, {"ask": "Take the case b = 2. What is a?", "type": "num", "answer": 1997, "nudges": ["9 · 2 = 18, so 5a = 10,003 − 18.", "5a = 9985.", "9985 ÷ 5 = ?"], "hint": "5a = 10,003 − 18 = 9985, so a = 9985 ÷ 5.", "solution": "a = 1997, which is prime.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "a number", "why": "Case 1 failing does not end the problem — Case 2 still had to be checked."}], "answer": "a = 1997, b = 2", "explain": "Both coefficients are odd and the total is odd, so exactly one prime is even, i.e. equals 2. Case a = 2 gives 9b = 9993, whose digit sum 30 is not a multiple of 9, so it fails. Case b = 2 gives 5a = 9985 and a = 1997, which is prime. Check: 5(1997) + 9(2) = 9985 + 18 = 10,003.", "concept": "<p class=\"tag\">Idea 8</p>\n  <h2>Primes hiding in equations</h2>\n  <p>Problems like &ldquo;find all primes a, b with 4a + 5b = 54&rdquo; look like algebra with too few\n  equations. The trick is that primes are extremely restricted, so <b>divisibility pins one of\n  them down</b> and the rest is arithmetic.</p>\n  <div class=\"stack\">4a + 5b = 54\n5b = 54 − 4a = 2(27 − 2a)   ← factor the right side\nso 5b is even; 5 is odd, so b is even\nthe only even prime is 2    →  b = 2\n4a + 10 = 54  →  4a = 44  →  a = 11  (prime ✓)</div>\n  <p>The same move works with any shared divisor, not just 2. In\n  <span class=\"m\">4a + 5b + 15c = 75</span>, the terms 5b, 15c and 75 are all multiples of 5,\n  so 4a must be too — and since 4 is not divisible by 5, a is. The only prime multiple of 5 is 5,\n  so a = 5 before you do any work at all.</p>\n  <p>A third move is <b>bounding</b>. In 4a + 5b = 54 both terms are positive, so 5b &lt; 54 and\n  b ≤ 10 — that leaves only 2, 3, 5 and 7 to test. Narrow the field with divisibility or bounds\n  first, then check the few survivors by hand. Guess-and-check is a finishing move, not an opening one.</p>\n  <p>And sometimes the honest answer is that nothing works. If the argument forces b = 3, and that\n  forces a = 93 = 3 · 31, then no prime pair exists. A contradiction you were driven into is a\n  finished proof, not a mistake.</p>\n  <div class=\"rulebox\"><p><b>Two moves to try first.</b> (1) <b>Parity:</b> if the equation forces a\n  prime to be even, that prime is 2. (2) <b>Shared divisor:</b> if every term but one is divisible\n  by d, the last one must be too. And always check your answer really is prime — sometimes the\n  conclusion is &ldquo;no such primes exist&rdquo;.</p></div>", "short": "two cases, one survives", "tags": [{"t": "Idea 8", "k": "set"}, {"t": "Primes hiding in equations", "k": ""}, {"t": "guided", "k": "core"}]}, {"id": "g9", "label": "Try it · smallest cube", "prompt": "What is the smallest positive perfect cube that is divisible by 720?", "src": "", "steps": [{"ask": "Write <span class='m'>720</span> as a product of prime numbers.", "type": "factor", "answer": "2^4*3^2*5", "nudges": ["Find any divisor you can see. Does 2 go into 720? Does 3? Does 5?", "Keep splitting every piece that is not prime. Stop only when every piece on the tree is prime.", "Multiply your pieces back together — you must land exactly on 720."], "hint": "Start the tree with 720 = 72 × 10, then break each of those two numbers down.", "solution": "720 = 2⁴ · 3² · 5", "recheck": "Redo this step on paper before you close the page.", "placeholder": "like 2^4*7^2", "why": "Every number has exactly one prime factorization, so this is the one right answer.", "forward": "you now have the primes you need"}, {"ask": "Write the smallest cube that is divisible by 720 as a product of prime powers.", "type": "factor", "answer": "2^6*3^3*5^3", "nudges": ["Exponents in 720 are 4, 2 and 1. Each must become a multiple of 3, and must not shrink.", "4 → 6, 2 → 3, 1 → 3.", "Write your three rounded prime powers as one product."], "hint": "A cube needs every exponent divisible by 3, and it must keep every exponent of 720. Step each one up to the next multiple of 3.", "solution": "The cube is 2⁶ · 3³ · 5³.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "like 2^4*7^2"}, {"ask": "What is that number?", "type": "num", "answer": 216000, "nudges": ["Group the primes into three equal piles: 2¶ · 3³ · 5³ = (2² · 3 · 5)³.", "2² · 3 · 5 = 60, so the cube is 60³.", "Work out 60 × 60 × 60."], "hint": "(2² · 3 · 5)³ = 60³.", "solution": "216,000 = 60³.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "a number", "why": "Check: 216,000 ÷ 720 = 300."}], "answer": "216,000 = 60³", "explain": "720 = 2⁴ · 3² · 5. A cube needs every exponent divisible by 3, and divisibility by 720 needs exponents of at least 4, 2, 1. Rounding up: 2⁶ · 3³ · 5³ = (2² · 3 · 5)³ = 60³ = 216,000. Check: 216,000 ÷ 720 = 300.", "concept": "<p class=\"tag\">Idea 9</p>\n  <h2>Squares, cubes and exponents</h2>\n  <p>Raising a number to a power multiplies every exponent in its factorization:</p>\n  <div class=\"stack\">1800 = 2³ · 3² · 5²\n1800⁷ = (2³ · 3² · 5²)⁷ = 2²¹ · 3¹⁴ · 5¹⁴      ← seven copies of each</div>\n  <p>Read that backwards and you get a test:</p>\n  <div class=\"rulebox\"><p><b>Perfect powers.</b> A number is a perfect square exactly when every\n  exponent in its prime factorization is even, and a perfect cube exactly when every exponent is a\n  multiple of 3. In general, a = bⁿ means every exponent of a is a multiple of n.</p></div>\n  <p>The test runs both ways. If every exponent is already a multiple of 3, divide each one by 3 to\n  read off the cube root: 2⁶ · 3³ · 5³ is the cube of 2² · 3 · 5 = 60.</p>\n  <p>That turns &ldquo;smallest cube divisible by 720&rdquo; into bookkeeping. 720 = 2⁴ · 3² · 5, so\n  the exponents must be at least 4, 2, 1 — and each must be a multiple of 3. Round each one up:</p>\n  <div class=\"stack\">2: 4 → 6      3: 2 → 3      5: 1 → 3\n2⁶ · 3³ · 5³ = (2² · 3 · 5)³ = 60³ = 216,000</div>\n  <p>The same rounding, with multiples of 2 instead of 3, answers &ldquo;which squares are multiples of\n  24?&rdquo; — problem 19 in the practice set.</p>", "short": "smallest cube", "tags": [{"t": "Idea 9", "k": "set"}, {"t": "Squares, cubes and exponents", "k": ""}, {"t": "guided", "k": "core"}]}, {"id": "g10", "label": "Try it · lining events up", "prompt": "Two lighthouse lamps flash every 9 seconds and every 12 seconds. They flash together now. When do they next flash together?", "src": "", "steps": [{"ask": "How many seconds until the two lamps flash together again?", "type": "num", "answer": 36, "nudges": ["Repeating events lining up again means you want a common multiple.", "9 = 3² and 12 = 2² · 3, so take 2² · 3² and multiply it out.", "4 × 9 = ?"], "hint": "Repeating events lining up again is a least-common-multiple question. Factor 9 and 12.", "solution": "After 36 seconds.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "seconds", "why": "The 9-second lamp has flashed 4 times, the 12-second lamp 3 times."}], "answer": "36 seconds", "explain": "LCM(9, 12) = 2² · 3² = 36. Careful: 9 × 12 = 108 is a common multiple, but not the least one — multiplying double-counts the shared factor of 3.", "concept": "<p class=\"tag\">Idea 10</p>\n  <h2>Word problems: which tool?</h2>\n  <p>Almost every word problem in this set is one of three shapes. Decide the shape first,\n  then the arithmetic is short.</p>\n  <table class=\"cmp\">\n    <tr><th>Shape</th><th>Signals</th><th>Tool</th></tr>\n    <tr><td>Things repeat on cycles and must line up again</td>\n        <td>every 4 weeks, blinks every 6 seconds, round trip of 12 days</td><td>LCM</td></tr>\n    <tr><td>A fixed pile is divided into equal groups with nothing left over</td>\n        <td>identical kits, largest possible groups, share equally</td><td>GCF</td></tr>\n    <tr><td>The same remainder appears every time</td>\n        <td>remainder 1 when divided by 2, 3, 4, 5</td><td>LCM, then add or subtract</td></tr>\n  </table>\n  <p>Two traps to watch. Multiplying the numbers together gives <em>a</em> common multiple but\n  usually not the <em>least</em> one: 9 × 12 = 108 while LCM(9, 12) = 36. And when a problem asks\n  &ldquo;how many times per minute&rdquo;, count the events inside the minute rather than the starting\n  moment when everything was switched on.</p>", "short": "lining events up", "tags": [{"t": "Idea 10", "k": "set"}, {"t": "Word problems: which tool?", "k": ""}, {"t": "guided", "k": "core"}]}, {"id": "g11", "label": "Try it · splitting into equal groups", "prompt": "You have 24 pencils and 36 erasers and want to make identical kits using everything. What is the largest number of kits, and what goes in each?", "src": "", "steps": [{"ask": "What is the largest number of kits?", "type": "num", "answer": 12, "nudges": ["Splitting a fixed pile into equal groups means you need a common factor of both totals.", "The largest one is the GCF: 24 = 2³ · 3 and 36 = 2² · 3².", "Smaller powers: 2² · 3 = ?"], "hint": "Splitting a fixed pile into equal groups with nothing left over is a greatest-common-factor question. Factor 24 and 36.", "solution": "12 kits.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "a number"}, {"ask": "How many pencils in each kit?", "type": "num", "answer": 2, "nudges": ["Split the 24 pencils across your 12 kits.", "24 ÷ 12.", "Then do the same with the erasers: 36 ÷ 12."], "hint": "Divide the pencils by the number of kits.", "solution": "2 pencils (and 3 erasers) per kit.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "a number"}], "answer": "12 kits, each with 2 pencils and 3 erasers", "explain": "Sharing a fixed amount into equal groups is a GCF question: GCF(24, 36) = 12. Each kit gets 24 ÷ 12 = 2 pencils and 36 ÷ 12 = 3 erasers, and nothing is left over. Compare with the lamp problem: events repeating into the future are LCM, dividing up a pile is GCF.", "concept": "<p class=\"tag\">Idea 10</p>\n  <h2>Word problems: which tool?</h2>\n  <p>Almost every word problem in this set is one of three shapes. Decide the shape first,\n  then the arithmetic is short.</p>\n  <table class=\"cmp\">\n    <tr><th>Shape</th><th>Signals</th><th>Tool</th></tr>\n    <tr><td>Things repeat on cycles and must line up again</td>\n        <td>every 4 weeks, blinks every 6 seconds, round trip of 12 days</td><td>LCM</td></tr>\n    <tr><td>A fixed pile is divided into equal groups with nothing left over</td>\n        <td>identical kits, largest possible groups, share equally</td><td>GCF</td></tr>\n    <tr><td>The same remainder appears every time</td>\n        <td>remainder 1 when divided by 2, 3, 4, 5</td><td>LCM, then add or subtract</td></tr>\n  </table>\n  <p>Two traps to watch. Multiplying the numbers together gives <em>a</em> common multiple but\n  usually not the <em>least</em> one: 9 × 12 = 108 while LCM(9, 12) = 36. And when a problem asks\n  &ldquo;how many times per minute&rdquo;, count the events inside the minute rather than the starting\n  moment when everything was switched on.</p>", "short": "splitting into equal groups", "tags": [{"t": "Idea 10", "k": "set"}, {"t": "Word problems: which tool?", "k": ""}, {"t": "guided", "k": "core"}]}, {"id": "g12", "label": "Try it · same remainder every time", "prompt": "What is the smallest whole number greater than 1 that leaves remainder 1 when divided by 2, 3, 4, 5 and 6?", "src": "", "steps": [{"ask": "What is the LCM of 2, 3, 4, 5 and 6?", "type": "num", "answer": 60, "nudges": ["Biggest power of 2 is 2² from 4; biggest power of 3 is 3¹; and you need 5.", "2² · 3 · 5.", "Multiply 4 × 3 × 5."], "hint": "Biggest power of 2, biggest power of 3, then the 5 — multiply them.", "solution": "LCM(2, 3, 4, 5, 6) = 60.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "a number"}, {"ask": "What is the smallest such number?", "type": "num", "answer": 61, "nudges": ["Add the remainder to the LCM.", "60 + 1.", "Check your answer: divide it by 4 and confirm the remainder is 1."], "hint": "If a number leaves remainder 1 on division by all of them, then the number minus 1 is a common multiple. You just found the smallest one.", "solution": "The number is 61.", "recheck": "Redo this step on paper before you close the page.", "placeholder": "a number", "why": "61 happens to be prime, but that is a coincidence here."}], "answer": "61", "explain": "If N leaves remainder 1 on division by 2, 3, 4, 5 and 6, then N − 1 is divisible by all of them, so N − 1 is a multiple of LCM = 60. The smallest choice above 1 is N = 61. Checks: 61 = 2(30)+1 = 3(20)+1 = 4(15)+1 = 5(12)+1 = 6(10)+1.", "concept": "<p class=\"tag\">Idea 10</p>\n  <h2>Word problems: which tool?</h2>\n  <p>Almost every word problem in this set is one of three shapes. Decide the shape first,\n  then the arithmetic is short.</p>\n  <table class=\"cmp\">\n    <tr><th>Shape</th><th>Signals</th><th>Tool</th></tr>\n    <tr><td>Things repeat on cycles and must line up again</td>\n        <td>every 4 weeks, blinks every 6 seconds, round trip of 12 days</td><td>LCM</td></tr>\n    <tr><td>A fixed pile is divided into equal groups with nothing left over</td>\n        <td>identical kits, largest possible groups, share equally</td><td>GCF</td></tr>\n    <tr><td>The same remainder appears every time</td>\n        <td>remainder 1 when divided by 2, 3, 4, 5</td><td>LCM, then add or subtract</td></tr>\n  </table>\n  <p>Two traps to watch. Multiplying the numbers together gives <em>a</em> common multiple but\n  usually not the <em>least</em> one: 9 × 12 = 108 while LCM(9, 12) = 36. And when a problem asks\n  &ldquo;how many times per minute&rdquo;, count the events inside the minute rather than the starting\n  moment when everything was switched on.</p>", "short": "same remainder every time", "tags": [{"t": "Idea 10", "k": "set"}, {"t": "Word problems: which tool?", "k": ""}, {"t": "guided", "k": "core"}]}], "startTab": "concept"});</script>
 </body></html>
